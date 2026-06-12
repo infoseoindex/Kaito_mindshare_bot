@@ -1,0 +1,15 @@
+[Unit]
+Description=Kaito Info Markets Historical Data Telegram monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/kaito-infomarkets-bot
+Environment=NODE_ENV=production
+ExecStart=/usr/local/bin/node /root/kaito-infomarkets-bot/src/index.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
