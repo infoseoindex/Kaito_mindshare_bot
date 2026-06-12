@@ -6,6 +6,7 @@ const APP = 'kaito-infomarkets-bot';
 const TELEGRAM_API = 'https://api.telegram.org';
 const KAITO_PAGE = 'https://kaito.ai/mindshare-arena/infomarkets';
 const STATE_FILE = new URL('../data/state.json', import.meta.url);
+const INTERVAL_OPTIONS = [15, 30, 60, 300];
 
 loadDotEnv();
 const config = {
@@ -19,6 +20,7 @@ const config = {
   telegramPolling: process.env.TELEGRAM_POLLING === 'true',
 };
 const state = loadState();
+ensureStateDefaults();
 
 main().catch((error) => {
   console.error(`[${APP}] fatal`, error);
@@ -27,7 +29,7 @@ main().catch((error) => {
 
 async function main() {
   if (!config.token) throw new Error('TELEGRAM_BOT_TOKEN is missing');
-  console.log(`[${APP}] started. Direct urls: ${config.dataUrls.length}. Poll: ${config.pollSeconds}s. Browser: ${config.browserEverySeconds}s.`);
+  console.log(`[${APP}] started. Direct urls: ${config.dataUrls.length}. Poll: ${getPollSeconds()}s. Effective: ${getEffectivePollSeconds()}s. Browser: ${config.browserEverySeconds}s.`);
   await setupTelegramCommands();
   if (config.chatId) await sendMessage(config.chatId, formatWelcome(), mainKeyboard()).catch((error) => console.error(`[${APP}] startup telegram notice skipped: ${error.message}`));
   if (config.telegramPolling) await Promise.all([telegramLoop(), monitorLoop()]);
@@ -44,14 +46,19 @@ async function telegramLoop() {
           await handleCallbackQuery(update.callback_query);
           continue;
         }
+
         const msg = update.message;
         if (!msg?.text || !msg.chat?.id) continue;
         state.chatIds[String(msg.chat.id)] = true;
+        ensureStateDefaults();
+        saveState();
+
         const command = msg.text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
         if (command === '/start' || command === '/menu' || command === '/help') await sendWelcome(msg.chat.id);
         else if (command === '/status') await sendStatus(msg.chat.id);
         else if (command === '/check') await handleCheck(msg.chat.id);
         else if (command === '/sources') await sendSources(msg.chat.id);
+        else if (command === '/settings') await sendSettings(msg.chat.id);
         else await sendWelcome(msg.chat.id);
       }
       saveState();
@@ -64,8 +71,9 @@ async function telegramLoop() {
 
 async function monitorLoop() {
   while (true) {
+    ensureStateDefaults();
     if (!state.paused) await checkOnce({ forced: false }).catch((e) => console.error(`[${APP}] check failed:`, e));
-    await delay(config.pollSeconds * 1000);
+    await delay(getEffectivePollSeconds() * 1000);
   }
 }
 
@@ -76,12 +84,39 @@ async function handleCallbackQuery(query) {
   if (!chatId) return;
 
   state.chatIds[String(chatId)] = true;
-  saveState();
+  ensureStateDefaults();
 
-  if (data === 'menu') return sendWelcome(chatId);
-  if (data === 'status') return sendStatus(chatId);
-  if (data === 'check') return handleCheck(chatId);
-  if (data === 'sources') return sendSources(chatId);
+  if (data === 'menu') {
+    saveState();
+    return sendWelcome(chatId);
+  }
+  if (data === 'status') {
+    saveState();
+    return sendStatus(chatId);
+  }
+  if (data === 'check') {
+    saveState();
+    return handleCheck(chatId);
+  }
+  if (data === 'sources') {
+    saveState();
+    return sendSources(chatId);
+  }
+  if (data === 'settings') {
+    saveState();
+    return sendSettings(chatId);
+  }
+  if (data === 'toggle_notifications') {
+    state.settings.notificationsEnabled = !state.settings.notificationsEnabled;
+    saveState();
+    return sendSettings(chatId);
+  }
+  if (data.startsWith('interval:')) {
+    const next = Number(data.slice('interval:'.length));
+    if (INTERVAL_OPTIONS.includes(next)) state.settings.pollSeconds = next;
+    saveState();
+    return sendSettings(chatId);
+  }
 }
 
 async function handleCheck(chatId) {
@@ -92,6 +127,7 @@ async function handleCheck(chatId) {
 }
 
 async function checkOnce({ forced }) {
+  ensureStateDefaults();
   const now = Date.now();
   let result = await fetchDirect();
   if (!result && (forced || now - (state.lastBrowserCheckAt || 0) >= config.browserEverySeconds * 1000)) {
@@ -114,7 +150,7 @@ async function checkOnce({ forced }) {
     const old = state.lastSignature;
     state.lastSignature = sig;
     saveState();
-    if (old || forced) await broadcast(formatAlert(result, old ? 'NEW / CHANGED' : 'INITIAL'), mainKeyboard());
+    if ((old || forced) && shouldNotify()) await broadcast(formatAlert(result, old ? 'NEW / CHANGED' : 'INITIAL'), mainKeyboard());
   } else {
     saveState();
   }
@@ -211,7 +247,6 @@ function extractCandidates(root, sourceUrl) {
   return out.filter((c) => c.finalized !== false);
 }
 
-
 function extractFromVisibleHistoricalData(text) {
   if (!/Historical Data/i.test(text) || !/Polymarket/i.test(text)) return null;
   const month = '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
@@ -244,16 +279,18 @@ function truthy(v) { return v === true || v === 1 || v === 'true' || v === 'fina
 
 function formatWelcome() {
   return [
-    '<b>Kaito Info Markets Monitor</b>',
-    '<code>LIVE | POLYMARKET | DAILY SNAPSHOTS</code>',
+    '🧠 <b>Kaito Mindshare Bot</b>',
+    '<code>LIVE · POLYMARKET · DAILY SNAPSHOTS</code>',
     '',
-    '<b>Project</b>: Polymarket',
-    '<b>Dataset</b>: Historical Data / Daily Snapshots',
-    '<b>Mode</b>: Direct Kaito API',
+    '🎯 <b>Latest</b>',
+    state.lastSeen ? compactValueLine(state.lastSeen) : '<i>not loaded yet</i>',
     '',
-    state.lastSeen ? compactValueLine(state.lastSeen) : '<b>Latest</b>: <i>not loaded yet</i>',
+    '📌 <b>Tracking</b>',
+    'Project: <b>Polymarket</b>',
+    'Dataset: <b>Historical Data</b>',
+    'Source: <b>direct Kaito API</b>',
     '',
-    'Use the control panel below.'
+    settingsLine(),
   ].join('\n');
 }
 
@@ -262,71 +299,83 @@ async function sendWelcome(chatId) {
 }
 
 function formatAlert(r, prefix) {
-  const title = prefix === 'NEW / CHANGED' ? 'NEW SNAPSHOT' : prefix === 'CURRENT' ? 'CURRENT SNAPSHOT' : 'KAITO SNAPSHOT';
+  const title = prefix === 'NEW / CHANGED' ? '🚨 New finalized snapshot' : prefix === 'CURRENT' ? '🔎 Current snapshot' : '🧠 Kaito snapshot';
   return [
     `<b>${escapeHtml(title)}</b>`,
     '<code>INFO MARKETS ARENA</code>',
     '',
-    `<b>Project</b>: Polymarket`,
-    `<b>Date</b>: ${escapeHtml(r.date)}`,
-    `<b>Mindshare</b>: ${r.valueRounded.toFixed(2)}%`,
+    `📅 <b>Date</b>: ${escapeHtml(r.date)}`,
+    `💎 <b>Polymarket mindshare</b>: ${r.valueRounded.toFixed(2)}%`,
     '',
-    `<b>Raw key</b>: <code>${escapeHtml(r.valueKey)}</code>`,
-    `<b>Checked</b>: <code>${escapeHtml(formatDateTime(new Date()))}</code>`
+    `🧩 <b>Raw key</b>: <code>${escapeHtml(r.valueKey)}</code>`,
+    `🕒 <b>Checked</b>: <code>${escapeHtml(formatDateTime(new Date()))}</code>`
   ].join('\n');
 }
 
 function formatResult(x, elapsed = '') {
   if (x.ok) {
-    const suffix = elapsed ? `
-<b>Response</b>: <code>${escapeHtml(elapsed)}s</code>` : '';
+    const suffix = elapsed ? `\n⚡ <b>Response</b>: <code>${escapeHtml(elapsed)}s</code>` : '';
     return formatAlert(x.result, 'CURRENT') + suffix;
   }
 
   return [
-    '<b>NO FINALIZED VALUE FOUND</b>',
+    '🟡 <b>No finalized value found</b>',
     '',
     escapeHtml(x.message),
-    `<b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`
+    `🕒 <b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`
   ].join('\n');
 }
 
 async function sendStatus(chatId) {
-  const last = state.lastSeen ? compactValueLine(state.lastSeen) : '<b>Latest</b>: <i>not loaded yet</i>';
-  const sourceHealth = state.noDataCount ? `<b>Source health</b>: CHECKING (${state.noDataCount})` : '<b>Source health</b>: OK';
+  const sourceHealth = state.noDataCount ? `🟡 Checking (${state.noDataCount})` : '🟢 OK';
   await sendMessage(chatId, [
-    '<b>Monitor Status</b>',
+    '📊 <b>Monitor Status</b>',
     '<code>KAITO MINDSHARE BOT</code>',
     '',
-    last,
-    `<b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`,
-    `<b>Poll interval</b>: ${config.pollSeconds}s`,
-    `<b>Direct sources</b>: ${config.dataUrls.length}`,
-    sourceHealth,
+    state.lastSeen ? compactValueLine(state.lastSeen) : 'Latest: <i>not loaded yet</i>',
     '',
-    `<b>Browser fallback</b>: <code>${escapeHtml(state.lastErrors.browser || 'standby')}</code>`
-  ].join('\\n'), mainKeyboard());
+    `🕒 <b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`,
+    `⏱ <b>Base interval</b>: ${formatInterval(getPollSeconds())}`,
+    `🚀 <b>Effective now</b>: ${formatInterval(getEffectivePollSeconds())}${isWaitingForNewDailySnapshot() ? ' · fast-watch' : ''}`,
+    `🔔 <b>Notifications</b>: ${state.settings.notificationsEnabled ? 'ON' : 'OFF'}`,
+    `🔌 <b>Direct sources</b>: ${config.dataUrls.length}`,
+    `🩺 <b>Source health</b>: ${sourceHealth}`,
+  ].join('\n'), mainKeyboard());
 }
 
 async function sendSources(chatId) {
   const directRows = config.dataUrls.map((url, index) => `${index + 1}. <code>${escapeHtml(shortUrl(url))}</code>`);
-  const discoveredRows = Object.entries(state.discoveredSources).slice(-5).map(([url, meta]) => `${escapeHtml(meta.lastSeenAt)} | ${meta.candidateCount}x
-<code>${escapeHtml(shortUrl(url))}</code>`);
+  const discoveredRows = Object.entries(state.discoveredSources).slice(-5).map(([url, meta]) => `${escapeHtml(meta.lastSeenAt)} · ${meta.candidateCount}x\n<code>${escapeHtml(shortUrl(url))}</code>`);
   await sendMessage(chatId, [
-    '<b>Data Sources</b>',
+    '🧭 <b>Data Sources</b>',
     '<code>DIRECT API FIRST</code>',
     '',
-    '<b>Primary direct API</b>',
-    directRows.length ? directRows.join('\\n') : '<i>none</i>',
+    '⚡ <b>Primary direct API</b>',
+    directRows.length ? directRows.join('\n') : '<i>none</i>',
     '',
-    '<b>Browser-discovered fallbacks</b>',
-    discoveredRows.length ? discoveredRows.join('\\n\\n') : '<i>none yet</i>'
-  ].join('\\n'), sourceKeyboard());
+    '🛟 <b>Browser-discovered fallbacks</b>',
+    discoveredRows.length ? discoveredRows.join('\n\n') : '<i>none yet</i>'
+  ].join('\n'), sourceKeyboard());
 }
+
+async function sendSettings(chatId) {
+  ensureStateDefaults();
+  await sendMessage(chatId, [
+    '⚙️ <b>Settings</b>',
+    '<code>ALERTS · SPEED · CONTROL</code>',
+    '',
+    `🔔 <b>Notifications</b>: ${state.settings.notificationsEnabled ? 'ON' : 'OFF'}`,
+    `⏱ <b>Base interval</b>: ${formatInterval(getPollSeconds())}`,
+    `🚀 <b>Fast-watch</b>: ${isWaitingForNewDailySnapshot() ? 'ACTIVE · 15s until new day appears' : 'standby'}`,
+    '',
+    'Choose a base interval or toggle alerts below. Fast-watch automatically checks every 15s when a new daily snapshot is due.'
+  ].join('\n'), settingsKeyboard());
+}
+
 function maybeNotifyNoData() {
-  if (!config.notifyNoDataEveryMinutes || !state.noDataCount) return;
+  if (!config.notifyNoDataEveryMinutes || !state.noDataCount || !shouldNotify()) return;
   const due = Date.now() - (state.lastNoDataNotifyAt || 0) >= config.notifyNoDataEveryMinutes * 60000;
-  if (due) { state.lastNoDataNotifyAt = Date.now(); broadcast(`Kaito check: no finalized daily value found yet. Last error: ${state.lastErrors.browser || 'none'}`).catch(console.error); }
+  if (due) { state.lastNoDataNotifyAt = Date.now(); broadcast(`🟡 Kaito check: no finalized daily value found yet. Last error: ${state.lastErrors.browser || 'none'}`).catch(console.error); }
 }
 async function broadcast(text, replyMarkup = mainKeyboard()) { for (const id of chatIds()) await sendMessage(id, text, replyMarkup); }
 function chatIds() { return [...new Set([config.chatId, ...Object.keys(state.chatIds || {})].filter(Boolean).map(String))]; }
@@ -346,6 +395,7 @@ async function setupTelegramCommands() {
       { command: 'start', description: 'Open control panel' },
       { command: 'status', description: 'Show latest snapshot' },
       { command: 'check', description: 'Force check now' },
+      { command: 'settings', description: 'Alerts and interval' },
       { command: 'sources', description: 'Show data sources' }
     ]
   }).catch((error) => console.error(`[${APP}] setMyCommands failed: ${error.message}`));
@@ -355,13 +405,30 @@ function mainKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: 'Refresh now', callback_data: 'check' },
-        { text: 'Status', callback_data: 'status' }
+        { text: '🔄 Refresh', callback_data: 'check' },
+        { text: '📊 Status', callback_data: 'status' }
       ],
       [
-        { text: 'Data sources', callback_data: 'sources' },
-        { text: 'Kaito page', url: KAITO_PAGE }
+        { text: '⚙️ Settings', callback_data: 'settings' },
+        { text: '🧭 Sources', callback_data: 'sources' }
+      ],
+      [
+        { text: '🌐 Kaito page', url: KAITO_PAGE }
       ]
+    ]
+  };
+}
+
+function settingsKeyboard() {
+  const enabled = state.settings.notificationsEnabled;
+  return {
+    inline_keyboard: [
+      [{ text: enabled ? '🔕 Turn notifications OFF' : '🔔 Turn notifications ON', callback_data: 'toggle_notifications' }],
+      INTERVAL_OPTIONS.map((seconds) => ({
+        text: `${seconds === getPollSeconds() ? '✓ ' : ''}${formatInterval(seconds)}`,
+        callback_data: `interval:${seconds}`
+      })),
+      [{ text: '📊 Status', callback_data: 'status' }, { text: '🏠 Menu', callback_data: 'menu' }]
     ]
   };
 }
@@ -369,14 +436,55 @@ function mainKeyboard() {
 function sourceKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Open Kaito page', url: KAITO_PAGE }],
-      [{ text: 'Back to menu', callback_data: 'menu' }]
+      [{ text: '🌐 Open Kaito page', url: KAITO_PAGE }],
+      [{ text: '⚙️ Settings', callback_data: 'settings' }, { text: '🏠 Menu', callback_data: 'menu' }]
     ]
   };
 }
 
 function compactValueLine(r) {
-  return `<b>Latest</b>: ${r.valueRounded.toFixed(2)}% | <b>Date</b>: <code>${escapeHtml(r.date)}</code>`;
+  return `💎 <b>${r.valueRounded.toFixed(2)}%</b> · 📅 <code>${escapeHtml(r.date)}</code>`;
+}
+
+function settingsLine() {
+  return `🔔 Alerts: <b>${state.settings.notificationsEnabled ? 'ON' : 'OFF'}</b> · ⏱ Base: <b>${formatInterval(getPollSeconds())}</b> · 🚀 Now: <b>${formatInterval(getEffectivePollSeconds())}</b>`;
+}
+
+function getPollSeconds() {
+  ensureStateDefaults();
+  return state.settings.pollSeconds || config.pollSeconds;
+}
+
+function getEffectivePollSeconds() {
+  return isWaitingForNewDailySnapshot() ? Math.min(getPollSeconds(), 15) : getPollSeconds();
+}
+
+function isWaitingForNewDailySnapshot() {
+  const latestDate = state.lastSeen?.date;
+  if (!latestDate) return true;
+  return latestDate < currentKaitoTargetDate();
+}
+
+function currentKaitoTargetDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function shouldNotify() {
+  ensureStateDefaults();
+  return state.settings.notificationsEnabled !== false;
+}
+
+function ensureStateDefaults() {
+  state.chatIds ||= {};
+  state.discoveredSources ||= {};
+  state.lastErrors ||= {};
+  state.settings ||= {};
+  if (typeof state.settings.notificationsEnabled !== 'boolean') state.settings.notificationsEnabled = true;
+  if (!INTERVAL_OPTIONS.includes(Number(state.settings.pollSeconds))) state.settings.pollSeconds = config.pollSeconds;
+}
+
+function formatInterval(seconds) {
+  return seconds >= 60 ? `${seconds / 60}m` : `${seconds}s`;
 }
 
 function formatDateTime(date) {
@@ -396,7 +504,7 @@ async function telegram(method, payload) {
   if (!response.ok || json.ok === false) throw new Error(`${method} failed: ${response.status} ${JSON.stringify(json)}`);
   return json;
 }
-function loadState() { try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return { telegramOffset: 0, chatIds: {}, discoveredSources: {}, lastErrors: {} }; } }
+function loadState() { try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return { telegramOffset: 0, chatIds: {}, discoveredSources: {}, lastErrors: {}, settings: {} }; } }
 function saveState() { mkdirSync(dirname(new URL(STATE_FILE).pathname), { recursive: true }); writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); }
 function loadDotEnv() { const p = new URL('../.env', import.meta.url); if (!existsSync(p)) return; for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) { const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['\"]|['\"]$/g, ''); } }
 function num(v, fallback) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : fallback; }
