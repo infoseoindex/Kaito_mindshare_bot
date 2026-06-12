@@ -244,15 +244,16 @@ function truthy(v) { return v === true || v === 1 || v === 'true' || v === 'fina
 
 function formatWelcome() {
   return [
-    '?? <b>Kaito Info Markets Monitor</b>',
+    '<b>Kaito Info Markets Monitor</b>',
+    '<code>LIVE | POLYMARKET | DAILY SNAPSHOTS</code>',
     '',
-    '?? Project: <b>Polymarket</b>',
-    '?? Data: <b>Historical Data / Daily Snapshots</b>',
-    '? Mode: <b>direct Kaito API</b>',
+    '<b>Project</b>: Polymarket',
+    '<b>Dataset</b>: Historical Data / Daily Snapshots',
+    '<b>Mode</b>: Direct Kaito API',
     '',
-    state.lastSeen ? compactValueLine(state.lastSeen) : 'Last value: <i>not loaded yet</i>',
+    state.lastSeen ? compactValueLine(state.lastSeen) : '<b>Latest</b>: <i>not loaded yet</i>',
     '',
-    '?? Use the buttons below for a quick check, status, and source.'
+    'Use the control panel below.'
   ].join('\n');
 }
 
@@ -261,61 +262,66 @@ async function sendWelcome(chatId) {
 }
 
 function formatAlert(r, prefix) {
-  const title = prefix === 'NEW / CHANGED' ? '?? New Kaito snapshot' : prefix === 'CURRENT' ? '?? Current snapshot' : '?? Kaito snapshot';
+  const title = prefix === 'NEW / CHANGED' ? 'NEW SNAPSHOT' : prefix === 'CURRENT' ? 'CURRENT SNAPSHOT' : 'KAITO SNAPSHOT';
   return [
     `<b>${escapeHtml(title)}</b>`,
+    '<code>INFO MARKETS ARENA</code>',
     '',
-    '?? Project: <b>Polymarket</b>',
-    `Date: <b>${escapeHtml(r.date)}</b>`,
-    `Daily finalized mindshare: <b>${r.valueRounded.toFixed(2)}%</b>`,
+    `<b>Project</b>: Polymarket`,
+    `<b>Date</b>: ${escapeHtml(r.date)}`,
+    `<b>Mindshare</b>: ${r.valueRounded.toFixed(2)}%`,
     '',
-    `?? Raw key: <code>${escapeHtml(r.valueKey)}</code>`,
-    `?? Checked: <code>${escapeHtml(formatDateTime(new Date()))}</code>`
+    `<b>Raw key</b>: <code>${escapeHtml(r.valueKey)}</code>`,
+    `<b>Checked</b>: <code>${escapeHtml(formatDateTime(new Date()))}</code>`
   ].join('\n');
 }
 
 function formatResult(x, elapsed = '') {
   if (x.ok) {
-    const suffix = elapsed ? `\nResponse time: <code>${escapeHtml(elapsed)}s</code>` : '';
+    const suffix = elapsed ? `
+<b>Response</b>: <code>${escapeHtml(elapsed)}s</code>` : '';
     return formatAlert(x.result, 'CURRENT') + suffix;
   }
 
   return [
-    '?? <b>No finalized value found</b>',
+    '<b>NO FINALIZED VALUE FOUND</b>',
     '',
     escapeHtml(x.message),
-    `?? Last run: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`
+    `<b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`
   ].join('\n');
 }
 
 async function sendStatus(chatId) {
-  const last = state.lastSeen ? compactValueLine(state.lastSeen) : 'Last value: <i>not loaded yet</i>';
-  const sourceHealth = state.noDataCount ? `?? No-data streak: <b>${state.noDataCount}</b>` : '?? Source health: <b>OK</b>';
+  const last = state.lastSeen ? compactValueLine(state.lastSeen) : '<b>Latest</b>: <i>not loaded yet</i>';
+  const sourceHealth = state.noDataCount ? `<b>Source health</b>: CHECKING (${state.noDataCount})` : '<b>Source health</b>: OK';
   await sendMessage(chatId, [
-    '?? <b>Monitor Status</b>',
+    '<b>Monitor Status</b>',
+    '<code>KAITO MINDSHARE BOT</code>',
     '',
     last,
-    `?? Last run: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`,
-    `? Poll interval: <b>${config.pollSeconds}s</b>`,
-    `?? Direct sources: <b>${config.dataUrls.length}</b>`,
+    `<b>Last run</b>: <code>${escapeHtml(state.lastRunAt || 'never')}</code>`,
+    `<b>Poll interval</b>: ${config.pollSeconds}s`,
+    `<b>Direct sources</b>: ${config.dataUrls.length}`,
     sourceHealth,
     '',
-    `?? Browser fallback: <code>${escapeHtml(state.lastErrors.browser || 'standby')}</code>`
-  ].join('\n'), mainKeyboard());
+    `<b>Browser fallback</b>: <code>${escapeHtml(state.lastErrors.browser || 'standby')}</code>`
+  ].join('\\n'), mainKeyboard());
 }
 
 async function sendSources(chatId) {
   const directRows = config.dataUrls.map((url, index) => `${index + 1}. <code>${escapeHtml(shortUrl(url))}</code>`);
-  const discoveredRows = Object.entries(state.discoveredSources).slice(-5).map(([url, meta]) => `${escapeHtml(meta.lastSeenAt)} ? ${meta.candidateCount}x\n<code>${escapeHtml(shortUrl(url))}</code>`);
+  const discoveredRows = Object.entries(state.discoveredSources).slice(-5).map(([url, meta]) => `${escapeHtml(meta.lastSeenAt)} | ${meta.candidateCount}x
+<code>${escapeHtml(shortUrl(url))}</code>`);
   await sendMessage(chatId, [
-    '?? <b>Data Sources</b>',
+    '<b>Data Sources</b>',
+    '<code>DIRECT API FIRST</code>',
     '',
-    '? <b>Primary direct API</b>',
-    directRows.length ? directRows.join('\n') : '<i>none</i>',
+    '<b>Primary direct API</b>',
+    directRows.length ? directRows.join('\\n') : '<i>none</i>',
     '',
-    '?? <b>Browser-discovered fallbacks</b>',
-    discoveredRows.length ? discoveredRows.join('\n\n') : '<i>none yet</i>'
-  ].join('\n'), sourceKeyboard());
+    '<b>Browser-discovered fallbacks</b>',
+    discoveredRows.length ? discoveredRows.join('\\n\\n') : '<i>none yet</i>'
+  ].join('\\n'), sourceKeyboard());
 }
 function maybeNotifyNoData() {
   if (!config.notifyNoDataEveryMinutes || !state.noDataCount) return;
@@ -349,12 +355,12 @@ function mainKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: '?? Refresh now', callback_data: 'check' },
-        { text: '?? Status', callback_data: 'status' }
+        { text: 'Refresh now', callback_data: 'check' },
+        { text: 'Status', callback_data: 'status' }
       ],
       [
-        { text: '?? Data sources', callback_data: 'sources' },
-        { text: '?? Kaito page', url: KAITO_PAGE }
+        { text: 'Data sources', callback_data: 'sources' },
+        { text: 'Kaito page', url: KAITO_PAGE }
       ]
     ]
   };
@@ -363,14 +369,14 @@ function mainKeyboard() {
 function sourceKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '?? Open Kaito page', url: KAITO_PAGE }],
-      [{ text: '?? Back to menu', callback_data: 'menu' }]
+      [{ text: 'Open Kaito page', url: KAITO_PAGE }],
+      [{ text: 'Back to menu', callback_data: 'menu' }]
     ]
   };
 }
 
 function compactValueLine(r) {
-  return `?? Latest: <b>${r.valueRounded.toFixed(2)}%</b> ? ?? <code>${escapeHtml(r.date)}</code>`;
+  return `<b>Latest</b>: ${r.valueRounded.toFixed(2)}% | <b>Date</b>: <code>${escapeHtml(r.date)}</code>`;
 }
 
 function formatDateTime(date) {
