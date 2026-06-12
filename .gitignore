@@ -1,7 +1,6 @@
 .env
-node_modules/
+node_modules
 data/*.json
 data/*.sqlite*
 *.log
 .DS_Store
-nnode_modulesn
